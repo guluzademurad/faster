@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Убеги от Эмиля</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700;900&display=swap');
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0b0c10;
+            font-family: 'Montserrat', sans-serif;
+            touch-action: none; /* Предотвращает скроллинг на мобильных при игре */
+        }
+
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* UI Overlays */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(11, 12, 16, 0.85);
+            backdrop-filter: blur(5px);
+            z-index: 10;
+            transition: opacity 0.3s ease;
+        }
+
+        .hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Неоновые эффекты для текста и кнопок */
+        .neon-text-blue {
+            color: #66fcf1;
+            text-shadow: 0 0 10px #66fcf1, 0 0 20px #66fcf1, 0 0 40px #45a29e;
+        }
+
+        .neon-text-red {
+            color: #ff3366;
+            text-shadow: 0 0 10px #ff3366, 0 0 20px #ff3366, 0 0 40px #cc0033;
+        }
+
+        .btn-neon {
+            background: transparent;
+            color: #66fcf1;
+            border: 2px solid #66fcf1;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 10px rgba(102, 252, 241, 0.3), inset 0 0 10px rgba(102, 252, 241, 0.3);
+        }
+
+        .btn-neon:hover {
+            background: #66fcf1;
+            color: #0b0c10;
+            box-shadow: 0 0 20px #66fcf1, 0 0 40px #66fcf1;
+            transform: scale(1.05);
+        }
+
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 5;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    
+    <!-- Heads Up Display (Score) -->
+    <div id="hud" class="hidden">
+        <div class="text-3xl font-bold text-white tracking-widest drop-shadow-md">
+            ВРЕМЯ: <span id="scoreDisplay" class="neon-text-blue">0.0</span> сек
+        </div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="startScreen" class="overlay">
+        <h1 class="text-5xl md:text-7xl font-black mb-4 neon-text-blue text-center">УБЕГИ ОТ<br><span class="neon-text-red">ЭМИЛЯ</span></h1>
+        <p class="text-gray-300 text-lg md:text-xl mb-10 text-center max-w-md px-4">
+            Управляй синим шаром с помощью мыши или пальца. <br>Не дай красному Эмилю догнать тебя! <br>С каждой секундой он становится быстрее.
+        </p>
+        <button id="startBtn" class="btn-neon">Начать игру</button>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="gameOverScreen" class="overlay hidden">
+        <h1 class="text-6xl md:text-8xl font-black mb-2 neon-text-red text-center">ПОПАЛСЯ!</h1>
+        <p class="text-gray-200 text-2xl mb-8 text-center">
+            Ты продержался: <br>
+            <span id="finalScore" class="text-5xl font-bold neon-text-blue mt-2 block">0.0 сек</span>
+        </p>
+        <button id="restartBtn" class="btn-neon">Начать заново</button>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // UI Elements
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const hud = document.getElementById('hud');
+        const startBtn = document.getElementById('startBtn');
+        const restartBtn = document.getElementById('restartBtn');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const finalScore = document.getElementById('finalScore');
+
+        // Game State Variables
+        let gameState = 'START'; // START, PLAYING, GAMEOVER
+        let animationId;
+        let score = 0;
+        let startTime = 0;
+
+        // Configuration
+        const config = {
+            playerColor: '#66fcf1',
+            enemyColor: '#ff3366',
+            playerRadius: 15,
+            enemyRadius: 20,
+            initialEnemySpeed: 2.5,
+            enemySpeedIncrease: 0.05, // Ускорение за каждую секунду
+            playerSpeed: 0.15 // Коэффициент сглаживания движения (lerp)
+        };
+
+        // Input coordinates (Mouse/Touch target)
+        const target = {
+            x: window.innerWidth / 2,
+            y: window.innerHeight / 2
+        };
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            // Если игра не начата, центрируем таргет
+            if (gameState === 'START') {
+                target.x = canvas.width / 2;
+                target.y = canvas.height / 2;
+            }
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Mouse and Touch listeners
+        function updateTarget(e) {
+            if (gameState !== 'PLAYING') return;
+            
+            if (e.touches && e.touches.length > 0) {
+                target.x = e.touches[0].clientX;
+                target.y = e.touches[0].clientY;
+            } else {
+                target.x = e.clientX;
+                target.y = e.clientY;
+            }
+        }
+
+        window.addEventListener('mousemove', updateTarget);
+        window.addEventListener('touchmove', (e) => {
+            // Prevent default behavior to avoid scrolling/refreshing on mobile
+            e.preventDefault(); 
+            updateTarget(e);
+        }, { passive: false });
+        
+        window.addEventListener('touchstart', updateTarget, { passive: false });
+
+        class Player {
+            constructor(x, y, radius, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.trail = [];
+            }
+
+            update() {
+                // Плавное движение к курсору (Lerp)
+                this.x += (target.x - this.x) * config.playerSpeed;
+                this.y += (target.y - this.y) * config.playerSpeed;
+
+                // Ограничение по краям экрана
+                this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
+                this.y = Math.max(this.radius, Math.min(canvas.height - this.radius, this.y));
+
+                // Добавляем точки для следа
+                this.trail.push({x: this.x, y: this.y});
+                if (this.trail.length > 15) {
+                    this.trail.shift();
+                }
+            }
+
+            draw() {
+                // Отрисовка следа
+                ctx.beginPath();
+                for (let i = 0; i < this.trail.length; i++) {
+                    const point = this.trail[i];
+                    const alpha = i / this.trail.length;
+                    ctx.lineTo(point.x, point.y);
+                    ctx.strokeStyle = `rgba(102, 252, 241, ${alpha * 0.5})`;
+                    ctx.lineWidth = this.radius;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                }
+                ctx.stroke();
+
+                // Отрисовка игрока (свечение)
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.shadowBlur = 0; // Сброс
+            }
+        }
+
+        class Enemy {
+            constructor(x, y, radius, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.speed = config.initialEnemySpeed;
+            }
+
+            update(playerX, playerY, survivalTime) {
+                // Увеличиваем скорость со временем
+                this.speed = config.initialEnemySpeed + (survivalTime * config.enemySpeedIncrease);
+
+                // Вычисляем направление к игроку
+                const dx = playerX - this.x;
+                const dy = playerY - this.y;
+                const distance = Math.hypot(dx, dy);
+
+                // Движемся к игроку
+                if (distance > 0) {
+                    this.x += (dx / distance) * this.speed;
+                    this.y += (dy / distance) * this.speed;
+                }
+            }
+
+            draw() {
+                // Отрисовка Эмиля
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 25;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Имя "Эмиль" над врагом
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 14px Montserrat';
+                ctx.textAlign = 'center';
+                ctx.fillText('ЭМИЛЬ', this.x, this.y - this.radius - 10);
+            }
+        }
+
+        let player;
+        let enemy;
+
+        function initGame() {
+            // Спавн игрока по центру
+            player = new Player(canvas.width / 2, canvas.height / 2, config.playerRadius, config.playerColor);
+            
+            // Задаем цель в центр при старте
+            target.x = canvas.width / 2;
+            target.y = canvas.height / 2;
+
+            // Спавн Эмиля в случайном углу вне экрана или на краю
+            const edge = Math.floor(Math.random() * 4);
+            let spawnX, spawnY;
+            if (edge === 0) { spawnX = Math.random() * canvas.width; spawnY = -50; } // Сверху
+            else if (edge === 1) { spawnX = canvas.width + 50; spawnY = Math.random() * canvas.height; } // Справа
+            else if (edge === 2) { spawnX = Math.random() * canvas.width; spawnY = canvas.height + 50; } // Снизу
+            else { spawnX = -50; spawnY = Math.random() * canvas.height; } // Слева
+
+            enemy = new Enemy(spawnX, spawnY, config.enemyRadius, config.enemyColor);
+
+            score = 0;
+            startTime = Date.now();
+            gameState = 'PLAYING';
+            
+            // Управление UI
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            hud.classList.remove('hidden');
+
+            animate();
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            cancelAnimationFrame(animationId);
+            
+            // Показываем экран конца игры
+            hud.classList.add('hidden');
+            finalScore.innerText = (score / 1000).toFixed(2) + ' сек';
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.lineWidth = 1;
+            const gridSize = 50;
+
+            for (let x = 0; x < canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+        }
+
+        function animate() {
+            if (gameState !== 'PLAYING') return;
+
+            animationId = requestAnimationFrame(animate);
+
+            // Очистка экрана (с эффектом следа)
+            ctx.fillStyle = 'rgba(11, 12, 16, 0.4)'; // Полупрозрачный фон для motion blur
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Отрисовка фоновой сетки
+            drawGrid();
+
+            // Обновление времени/счета
+            score = Date.now() - startTime;
+            const survivalTimeSeconds = score / 1000;
+            scoreDisplay.innerText = survivalTimeSeconds.toFixed(1);
+
+            // Обновление сущностей
+            player.update();
+            enemy.update(player.x, player.y, survivalTimeSeconds);
+
+            // Отрисовка сущностей
+            player.draw();
+            enemy.draw();
+
+            // Проверка столкновений
+            const dist = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+            if (dist < player.radius + enemy.radius - 5) { // -5 для прощения мелких касаний
+                endGame();
+            }
+        }
+
+        // Event Listeners for Buttons
+        startBtn.addEventListener('click', initGame);
+        restartBtn.addEventListener('click', initGame);
+
+        // Базовая отрисовка фона при загрузке
+        ctx.fillStyle = '#0b0c10';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawGrid();
+
+    </script>
+</body>
+</html>
